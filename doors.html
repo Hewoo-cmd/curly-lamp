@@ -1,1 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Roblox DOORS REMAKE</title>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: #000; font-family: 'Courier New', sans-serif; }
+        #canvas-container { width: 100%; height: 100%; }
+        #crosshair {
+            position: absolute; top: 50%; left: 50%;
+            width: 8px; height: 8px;
+            transform: translate(-50%, -50%);
+            border: 2px solid rgba(255,255,255,0.8); border-radius: 50%;
+            pointer-events: none;
+        }
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            color: white; font-size: 24px; text-shadow: 2px 2px #000;
+            pointer-events: none;
+            z-index: 5;
+        }
+        #prompt {
+            position: absolute; bottom: 20%; width: 100%;
+            text-align: center; color: #ffcc00; font-size: 28px;
+            font-weight: bold; text-shadow: 2px 2px #000;
+            display: none; pointer-events: none;
+        }
+        #click-to-play {
+            position: absolute; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); color: white;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 10; cursor: pointer;
+        }
+        
+        /* Violent Animated Jumpscare Overlay */
+        #jumpscare {
+            position: absolute; width: 100%; height: 100%;
+            background: radial-gradient(circle, #3a0000 0%, #050000 100%); 
+            color: white;
+            display: none; justify-content: center; align-items: center; flex-direction: column;
+            z-index: 20;
+            overflow: hidden;
+            animation: cameraShake 0.08s infinite;
+        }
+        
+        /* Rush Face Animation */
+        #rush-face {
+            width: 100px;
+            height: 100px;
+            background: #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 80px #fff, 0 0 150px red;
+            position: relative;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            padding: 10px;
+            box-sizing: border-box;
+            transform: scale(0.1);
+            opacity: 0;
+            animation: rushZoomIn 0.4s cubic-bezier(0.6, -0.28, 0.735, 0.045) forwards;
+        }
+        
+        #rush-face::before, #rush-face::after {
+            content: ''; width: 25px; height: 35px; background: #000; border-radius: 50%;
+        }
+        
+        #rush-mouth {
+            position: absolute; bottom: 15px; width: 60%; height: 20px; 
+            background: #000; border-radius: 0 0 50% 50%;
+        }
 
+        #death-msg { 
+            font-size: 60px; font-weight: bold; color: #ff2222; 
+            text-shadow: 3px 3px #000; margin-top: 40px; 
+            opacity: 0; animation: fadeInText 0.5s ease 0.5s forwards;
+        }
+        #restart-msg {
+            font-size: 20px; color: #aaa; margin-top: 10px;
+            opacity: 0; animation: fadeInText 0.5s ease 1s forwards;
+        }
+
+        /* KEYFRAMES FOR ANIMATIONS */
+        @keyframes cameraShake {
+            0% { transform: translate(3px, 5px) rotate(0deg); }
+            50% { transform: translate(-3px, -4px) rotate(-1deg); }
+            100% { transform: translate(2px, -2px) rotate(1deg); }
+        }
+        @keyframes rushZoomIn {
+            0% { transform: scale(0.1) rotate(0deg); opacity: 0; }
+            50% { opacity: 1; }
+            100% { transform: scale(6.5) rotate(15deg); opacity: 0.95; filter: invert(1); }
+        }
+        @keyframes fadeInText {
+            to { opacity: 1; }
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+<div id="click-to-play">
+    <h1>CLICK HERE TO PLAY</h1>
+    <p style="font-size: 18px; color: #aaa;">Controls: WASD (Move) | Mouse (Look Around) | Space (Jump) | E (Interact)</p>
+</div>
+
+<div id="jumpscare">
+    <div id="rush-face">
+        <div id="rush-mouth"></div>
+    </div>
+    <div id="death-msg">☠️ RUSH CAUGHT YOU ☠️</div>
+    <!-- UPDATED: UI prompt updated to reflect [Z] key -->
+    <div id="restart-msg">Press [Z] to instantly restart</div>
+</div>
+
+<div id="crosshair"></div>
+<div id="prompt">Press [E] to Interact</div>
+
+<div id="ui">
+    <div id="door-txt">Highest Door: 0</div>
+    <div id="key-txt">Keys: 0</div>
+    <div id="status-txt" style="font-size:18px; color:#ffcc00; margin-top:10px; font-weight:bold;"></div>
+</div>
+
+<div id="canvas-container"></div>
+
+<script>
+let scene, camera, renderer;
+let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, canJump = false;
+let velocity = new THREE.Vector3();
+let prevTime = performance.now();
+
+// Game Progression
+let highestDoorReached = 0;
+let roomKeys = {}; 
+let roomCleared = {}; 
+let isHidden = false;
+let alive = true;
+let hideTimer = 0;
+let rushActive = false, rushProgress = 0, currentFlickerLights = [];
+
+// Raycasting & Interaction
+let raycaster = new THREE.Raycaster();
+let interactTarget = null;
+let interactableObjects = [];
+let spawnedWorldObjects = []; // Keeps track of ALL meshes to easily clear them on restart
+
+let roomLength = 40;
+let roomWidth = 20;
+
+// Camera Setup Hierarchy
+let pitchObject = new THREE.Object3D();
+let yawObject = new THREE.Object3D();
+yawObject.add(pitchObject);
+
+document.addEventListener('mousemove', (event) => {
+    if (document.pointerLockElement !== document.body || !alive) return;
+    yawObject.rotation.y -= event.movementX * 0.0025;
+    pitchObject.rotation.x -= event.movementY * 0.0025;
+    pitchObject.rotation.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitchObject.rotation.x));
+});
+
+const blocker = document.getElementById('click-to-play');
+blocker.addEventListener('click', () => { document.body.requestPointerLock(); });
+document.addEventListener('pointerlockchange', () => {
+    // Only bring back blocker overlay if player is alive and unlocks pointer
+    if (document.pointerLockElement !== document.body && alive) {
+        blocker.style.display = 'flex';
+    } else if (document.pointerLockElement === document.body) {
+        blocker.style.display = 'none';
+    }
+});
+
+init();
+animate();
+
+function init() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x140f0c);
+    scene.fog = new THREE.FogExp2(0x140f0c, 0.03);
+
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    pitchObject.add(camera);
+    scene.add(yawObject);
+    
+    yawObject.position.set(0, 2.5, -5);
+
+    let ambientLight = new THREE.AmbientLight(0x555555);
+    scene.add(ambientLight);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    window.addEventListener('resize', onWindowResize);
+
+    generateRoomSegment(0);
+}
+
+// NEW: Instant Restart function map cleaner
+function restartGame() {
+    // 1. Clean out all previous world blocks from ThreeJS scene memory
+    spawnedWorldObjects.forEach(obj => scene.remove(obj));
+    
+    // 2. Clear out state tracker arrays
+    spawnedWorldObjects = [];
+    interactableObjects = [];
+    currentFlickerLights = [];
+    roomKeys = {};
+    roomCleared = {};
+
+    // 3. Reset state logic metrics
+    highestDoorReached = 0;
+    isHidden = false;
+    hideTimer = 0;
+    rushActive = false;
+    rushProgress = 0;
+    alive = true;
+
+    // 4. Reset interface text display layers
+    document.getElementById('jumpscare').style.display = 'none';
+    document.getElementById('door-txt').innerText = "Highest Door: 0";
+    document.getElementById('key-txt').innerText = "Keys: 0";
+    document.getElementById('status-txt').innerText = "Restarted! Door 1 Ahead.";
+
+    // 5. Reset camera vector positions back to lobby coordinates
+    yawObject.position.set(0, 2.5, -5);
+    yawObject.rotation.set(0, 0, 0);
+    pitchObject.rotation.set(0, 0, 0);
+    velocity.set(0, 0, 0);
+
+    // 6. Force lock pointer focus instantly to dodge blocker steps
+    document.body.requestPointerLock();
+
+    // 7. Spawn default Room Zero entry room
+    generateRoomSegment(0);
+}
+
+function generateRoomSegment(roomIndex) {
+    let zOffset = -(roomIndex * roomLength);
+
+    let wallMat = new THREE.MeshLambertMaterial({ color: 0x5c4033 }); 
+    let floorMat = new THREE.MeshLambertMaterial({ color: 0x3d2b1f }); 
+    let ceilMat = new THREE.MeshLambertMaterial({ color: 0x2b1d14 });
+
+    // Floor & Ceiling
+    let floor = new THREE.Mesh(new THREE.BoxGeometry(roomWidth, 1, roomLength), floorMat);
+    floor.position.set(0, -0.5, zOffset - roomLength/2);
+    scene.add(floor); spawnedWorldObjects.push(floor);
+
+    let ceil = new THREE.Mesh(new THREE.BoxGeometry(roomWidth, 1, roomLength), ceilMat);
+    ceil.position.set(0, 8, zOffset - roomLength/2);
+    scene.add(ceil); spawnedWorldObjects.push(ceil);
+
+    // Left & Right Walls
+    let leftWall = new THREE.Mesh(new THREE.BoxGeometry(1, 8, roomLength), wallMat);
+    leftWall.position.set(-roomWidth/2, 4, zOffset - roomLength/2);
+    scene.add(leftWall); spawnedWorldObjects.push(leftWall);
+
+    let rightWall = new THREE.Mesh(new THREE.BoxGeometry(1, 8, roomLength), wallMat);
+    rightWall.position.set(roomWidth/2, 4, zOffset - roomLength/2);
+    scene.add(rightWall); spawnedWorldObjects.push(rightWall);
+
+    // Archways
+    let archLeft = new THREE.Mesh(new THREE.BoxGeometry(8, 8, 1), wallMat);
+    archLeft.position.set(-7, 4, zOffset - roomLength);
+    scene.add(archLeft); spawnedWorldObjects.push(archLeft);
+    
+    let archRight = new THREE.Mesh(new THREE.BoxGeometry(8, 8, 1), wallMat);
+    archRight.position.set(7, 4, zOffset - roomLength);
+    scene.add(archRight); spawnedWorldObjects.push(archRight);
+
+    let archTop = new THREE.Mesh(new THREE.BoxGeometry(6, 3, 1), wallMat);
+    archTop.position.set(0, 6.5, zOffset - roomLength);
+    scene.add(archTop); spawnedWorldObjects.push(archTop);
+
+    // Door Asset
+    let doorMat = new THREE.MeshLambertMaterial({ color: 0xcd7f32 });
+    let nextDoor = new THREE.Mesh(new THREE.BoxGeometry(6, 5, 0.4), doorMat);
+    nextDoor.position.set(0, 2.5, zOffset - roomLength);
+    nextDoor.userData = { type: 'door', targetRoom: roomIndex + 1 };
+    scene.add(nextDoor);
+    interactableObjects.push(nextDoor);
+    spawnedWorldObjects.push(nextDoor);
+
+    // Light Source
+    let roomLight = new THREE.PointLight(0xffeedd, 2.0, 40);
+    roomLight.position.set(0, 7, zOffset - roomLength/2);
+    scene.add(roomLight);
+    currentFlickerLights.push(roomLight);
+    spawnedWorldObjects.push(roomLight);
+
+    if (roomIndex > 0) {
+        spawnDesk(zOffset, roomIndex);
+        spawnCloset(zOffset);
+    }
+    
+    roomKeys[roomIndex + 1] = false; 
+    roomCleared[roomIndex] = false;
+}
+
+function spawnDesk(zOffset, roomIndex) {
+    let deskMat = new THREE.MeshLambertMaterial({ color: 0x8b5a2b });
+    let desk = new THREE.Group();
+    let top = new THREE.Mesh(new THREE.BoxGeometry(4, 0.3, 2), deskMat); top.position.y = 2; desk.add(top);
+    let leg1 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2, 0.3), deskMat); leg1.position.set(-1.8, 1, -0.8); desk.add(leg1);
+    let leg2 = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2, 0.3), deskMat); leg2.position.set(1.8, 1, -0.8); desk.add(leg2);
+    
+    let side = Math.random() > 0.5 ? -8 : 8;
+    desk.position.set(side, 0, zOffset - 10 - Math.random() * 20);
+    desk.userData = { type: 'desk', searched: false, roomBelonging: roomIndex + 1 };
+    scene.add(desk); spawnedWorldObjects.push(desk);
+    
+    top.userData = { parentGroup: desk };
+    interactableObjects.push(top);
+}
+
+function spawnCloset(zOffset) {
+    let closetMat = new THREE.MeshLambertMaterial({ color: 0x223344 });
+    let closet = new THREE.Mesh(new THREE.BoxGeometry(2.5, 6, 2.5), closetMat);
+    let side = Math.random() > 0.5 ? -8.5 : 8.5;
+    closet.position.set(side, 3, zOffset - 10 - Math.random() * 20);
+    closet.userData = { type: 'closet' };
+    scene.add(closet); interactableObjects.push(closet); spawnedWorldObjects.push(closet);
+}
+
+function triggerRushSequence() {
+    document.getElementById('status-txt').innerText = "⚠️ LIGHTS ARE FLICKERING! FIND A CLOSET! ⚠️";
+    
+    let flickerCount = 0;
+    let interval = setInterval(() => {
+        if(!alive) { clearInterval(interval); return; }
+        currentFlickerLights.forEach(l => l.intensity = l.intensity === 0 ? 2.0 : 0);
+        flickerCount++;
+        
+        if(flickerCount > 12) {
+            clearInterval(interval);
+            currentFlickerLights.forEach(l => l.intensity = 0.1); 
+            
+            rushActive = true;
+            rushProgress = -(highestDoorReached * roomLength) - 50; 
+        }
+    }, 150);
+}
+
+function onKeyDown(event) {
+    // NEW: If player is dead and presses Z, fire restart operations loop sequence
+    if (!alive && event.code === 'KeyZ') {
+        restartGame();
+        return;
+    }
+
+    switch (event.code) {
+        case 'KeyW': moveForward = true; break;
+        case 'KeyS': moveBackward = true; break;
+        case 'KeyA': moveLeft = true; break;
+        case 'KeyD': moveRight = true; break;
+        case 'Space': if (canJump) velocity.y += 12; canJump = false; break;
+        case 'KeyE': interact(); break;
+    }
+}
+
+function onKeyUp(event) {
+    switch (event.code) {
+        case 'KeyW': moveForward = false; break;
+        case 'KeyS': moveBackward = false; break;
+        case 'KeyA': moveLeft = false; break;
+        case 'KeyD': moveRight = false; break;
+    }
+}
+
+function interact() {
+    if(!interactTarget || !alive) return;
+    let target = interactTarget.userData.parentGroup || interactTarget;
+
+    if (target.userData.type === 'door') {
+        let targetRoomNum = target.userData.targetRoom;
+        
+        if (roomCleared[targetRoomNum - 1] || roomKeys[targetRoomNum] === true || targetRoomNum === 1) {
+            if (!roomCleared[targetRoomNum - 1]) {
+                roomCleared[targetRoomNum - 1] = true;
+                highestDoorReached = targetRoomNum;
+                document.getElementById('door-txt').innerText = "Highest Door: " + highestDoorReached;
+                
+                let doorInterval = setInterval(() => {
+                    target.position.y += 0.2;
+                    if(target.position.y >= 7.5) clearInterval(doorInterval);
+                }, 20);
+
+                generateRoomSegment(highestDoorReached);
+                
+                if (Math.random() < 0.4) {
+                    triggerRushSequence();
+                }
+            }
+        } else {
+            document.getElementById('status-txt').innerText = `Door ${targetRoomNum} is locked! Find Key ${targetRoomNum} in drawers!`;
+        }
+    } 
+    else if (target.userData.type === 'desk') {
+        if (!target.userData.searched) {
+            target.userData.searched = true;
+            let targetKeyIndex = target.userData.roomBelonging;
+            roomKeys[targetKeyIndex] = true;
+            document.getElementById('key-txt').innerText = `Keys: Door ${targetKeyIndex} Key`;
+            document.getElementById('status-txt').innerText = `Found Key for Door ${targetKeyIndex}!`;
+        } else {
+            document.getElementById('status-txt').innerText = "This desk is empty.";
+        }
+    }
+    else if (target.userData.type === 'closet') {
+        isHidden = !isHidden;
+        if(isHidden) {
+            document.getElementById('status-txt').innerText = "Inside closet. Safe from Rush.";
+            hideTimer = 0;
+        } else {
+            document.getElementById('status-txt').innerText = "Exited closet.";
+        }
+    }
+}
+
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const time = performance.now();
+    
+    if (alive && document.pointerLockElement === document.body) {
+        const delta = (time - prevTime) / 1000;
+
+        velocity.x -= velocity.x * 10.0 * delta;
+        velocity.z -= velocity.z * 10.0 * delta;
+        velocity.y -= 9.8 * 3.5 * delta;
+
+        let frontVec = new THREE.Vector3(0, 0, -1).applyQuaternion(yawObject.quaternion);
+        let sideVec = new THREE.Vector3(1, 0, 0).applyQuaternion(yawObject.quaternion);
+        
+        let moveVec = new THREE.Vector3();
+        if (moveForward) moveVec.add(frontVec);
+        if (moveBackward) moveVec.sub(frontVec);
+        if (moveLeft) moveVec.sub(sideVec);
+        if (moveRight) moveVec.add(sideVec);
+        moveVec.y = 0; 
+        moveVec.normalize();
+
+        if (!isHidden) {
+            velocity.x += moveVec.x * 180.0 * delta;
+            velocity.z += moveVec.z * 180.0 * delta;
+        }
+
+        yawObject.position.x += velocity.x * delta;
+        yawObject.position.z += velocity.z * delta;
+        yawObject.position.y += velocity.y * delta;
+
+        if (yawObject.position.y < 2.5) {
+            velocity.y = 0;
+            yawObject.position.y = 2.5;
+            canJump = true;
+        }
+
+        let currentMaxDepth = -(highestDoorReached * roomLength) - 38;
+        if(yawObject.position.x < -9) yawObject.position.x = -9;
+        if(yawObject.position.x > 9) yawObject.position.x = 9;
+        if(yawObject.position.z > 0) yawObject.position.z = 0; 
+        if(yawObject.position.z < currentMaxDepth) yawObject.position.z = currentMaxDepth;
+
+        if (isHidden) {
+            hideTimer += delta;
+            if (hideTimer > 5 && hideTimer < 8) {
+                document.getElementById('status-txt').innerText = "⚠️ GET OUT! HIDE IS PUSHING YOU OUT! ⚠️";
+            } else if (hideTimer >= 8) {
+                killPlayer("HIDE");
+            }
+            scene.background = new THREE.Color(0x030303);
+        } else {
+            scene.background = new THREE.Color(0x140f0c);
+        }
+
+        if (rushActive) {
+            rushProgress += 26 * delta; 
+            
+            if(Math.abs(yawObject.position.z - rushProgress) < 25) {
+                camera.position.x = (Math.random() - 0.5) * 0.25;
+                camera.position.y = (Math.random() - 0.5) * 0.25;
+            }
+
+            if (rushProgress >= yawObject.position.z - 3 && rushProgress <= yawObject.position.z + 3) {
+                if (!isHidden) {
+                    killPlayer("RUSH");
+                }
+            }
+
+            if (rushProgress > 10) {
+                rushActive = false;
+                document.getElementById('status-txt').innerText = "Rush has passed.";
+            }
+        } else {
+            camera.position.set(0,0,0);
+        }
+
+        let centerPoint = new THREE.Vector2(0, 0);
+        raycaster.setFromCamera(centerPoint, camera);
+        let intersects = raycaster.intersectObjects(interactableObjects, true);
+        
+        if (intersects.length > 0 && intersects[0].distance < 8) {
+            let baseObj = intersects[0].object;
+            let actualTarget = baseObj.userData.parentGroup || baseObj;
+            
+            if (actualTarget.userData.type) {
+                interactTarget = baseObj;
+                let prompt = document.getElementById('prompt');
+                prompt.style.display = 'block';
+                if(actualTarget.userData.type === 'door') prompt.innerText = roomCleared[actualTarget.userData.targetRoom - 1] ? "Opened" : "Press [E] to Open Door";
+                if(actualTarget.userData.type === 'desk') prompt.innerText = actualTarget.userData.searched ? "[Searched]" : "Press [E] to Search Desk";
+                if(actualTarget.userData.type === 'closet') prompt.innerText = isHidden ? "Press [E] to Exit Closet" : "Press [E] to Hide in Closet";
+            } else {
+                hidePrompt();
+            }
+        } else {
+            hidePrompt();
+        }
+    }
+
+    prevTime = time;
+    renderer.render(scene, camera);
+}
+
+function hidePrompt() {
+    interactTarget = null;
+    document.getElementById('prompt').style.display = 'none';
+}
+
+function killPlayer(entity) {
+    alive = false;
+    document.exitPointerLock();
+    
+    // NEW: Trigger jumpscare animation trigger manually on reset
+    let face = document.getElementById('rush-face');
+    face.style.animation = 'none';
+    face.offsetHeight; // Force reflow trigger to restart CSS animations cleanly
+    
+    let overlay = document.getElementById('jumpscare');
+    let msg = document.getElementById('death-msg');
+    overlay.style.display = 'flex';
+    
+    if(entity === "RUSH") {
+        msg.innerText = "☠️ RUSH CAUGHT YOU ☠️";
+        face.style.display = 'flex';
+        face.style.animation = 'rushZoomIn 0.4s cubic-bezier(0.6, -0.28, 0.735, 0.045) forwards';
+    }
+    if(entity === "HIDE") {
+        msg.innerText = "☠️ HIDE PUSHED YOU OUT ☠️";
+        face.style.display = 'none'; 
+    }
+}
+</script>
+</body>
+</html>
