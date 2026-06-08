@@ -1,1 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Cyber Rider: Ultimate Expansion (FIXED)</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #040207;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            user-select: none;
+        }
+        #ui {
+            position: absolute;
+            top: 25px;
+            left: 25px;
+            color: white;
+            pointer-events: none;
+            z-index: 5;
+        }
+        h1 { 
+            margin: 0; font-size: 28px; font-weight: 900; letter-spacing: 3px; 
+            background: linear-gradient(45deg, #ff00ff, #00ffff, #ffff00);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .stat { font-size: 20px; margin-top: 5px; font-weight: bold; }
+        #coin-display { color: #ffff00; text-shadow: 0 0 10px rgba(255,255,0,0.5); }
+        #score-display { color: #00ffff; text-shadow: 0 0 10px rgba(0,255,255,0.5); }
+        #biome-display { color: #ff00ff; font-size: 16px; margin-top: 4px; letter-spacing: 2px; text-transform: uppercase; }
+        
+        #overdrive-banner {
+            display: none; position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
+            color: #ffff00; font-size: 32px; font-weight: 900; letter-spacing: 5px;
+            text-shadow: 0 0 15px #ffff00; animation: blink 0.2s infinite alternate; z-index: 5;
+        }
+        
+        #game-over-panel {
+            display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(10, 6, 22, 0.95); padding: 30px; border-radius: 20px;
+            border: 2px solid #ff0055; text-align: center; color: white; width: 420px; z-index: 10;
+            box-shadow: 0 0 40px rgba(255, 0, 85, 0.4);
+        }
+        #panel-title { color: #ff0055; font-size: 42px; font-weight: 900; margin: 0 0 15px 0; }
+        
+        .shop-heading { margin-top: 20px; font-size: 18px; color: #00ffff; letter-spacing: 1px; font-weight: bold; }
+        .shop-grid { display: flex; justify-content: space-between; margin-top: 10px; gap: 10px; }
+        .shop-item {
+            flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15);
+            padding: 12px 5px; border-radius: 10px; cursor: pointer; transition: all 0.2s ease;
+        }
+        .shop-item:hover { background: rgba(0,255,255,0.1); border-color: #00ffff; }
+        .shop-item.equipped { background: rgba(0, 255, 200, 0.2) !important; border-color: #00ffcc !important; }
+        .item-name { font-size: 13px; font-weight: bold; }
+        .item-cost { font-size: 12px; color: #ffff00; margin-top: 4px; }
 
+        #restart-btn {
+            margin-top: 25px; background: linear-gradient(45deg, #ff0055, #ff00ff);
+            color: white; border: none; padding: 12px 40px; font-size: 16px; font-weight: bold;
+            border-radius: 30px; cursor: pointer; transition: transform 0.1s;
+        }
+        #restart-btn:hover { transform: scale(1.05); }
+
+        #controls-guide {
+            position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%);
+            color: rgba(255,255,255,0.4); font-size: 13px; background: rgba(5, 3, 10, 0.85);
+            padding: 10px 25px; border-radius: 30px; z-index: 5; pointer-events: none;
+        }
+        @keyframes blink { from { opacity: 1; } to { opacity: 0.3; } }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="ui">
+        <h1>CYBER RIDER: ULTIMATE</h1>
+        <div class="stat">SCORE: <span id="score-display">0</span></div>
+        <div class="stat">COINS: <span id="coin-display">0</span></div>
+        <div id="biome-display">Metropolis Grid</div>
+    </div>
+
+    <div id="overdrive-banner">NITRO OVERDRIVE</div>
+
+    <div id="game-over-panel">
+        <div id="panel-title">TOTALED!</div>
+        <div style="font-size: 18px;">Final Score: <span id="final-score" style="color:#00ffff; font-weight:bold;">0</span></div>
+        
+        <div class="shop-heading">⚙️ SPEND COINS IN THE GARAGE</div>
+        <div class="shop-grid">
+            <div class="shop-item equipped" id="shop-car0" onclick="buyOrEquipCar(0)">
+                <div class="item-name">Cyber Cruiser</div>
+                <div class="item-cost" style="color:#00ffcc;">EQUIPPED</div>
+            </div>
+            <div class="shop-item" id="shop-car1" onclick="buyOrEquipCar(1)">
+                <div class="item-name">Laser Cycle</div>
+                <div class="item-cost" id="cost-car1">💰 5 Coins</div>
+            </div>
+            <div class="shop-item" id="shop-car2" onclick="buyOrEquipCar(2)">
+                <div class="item-name">Heavy Tanker</div>
+                <div class="item-cost" id="cost-car2">💰 12 Coins</div>
+            </div>
+        </div>
+
+        <button id="restart-btn" onclick="resetUltimateGame()">Deploy Vehicle</button>
+    </div>
+    
+    <div id="controls-guide">A / D or Arrow Keys to Swap Lanes</div>
+
+    <script>
+        const LANES = [-4.2, 0, 4.2];
+        let currentLaneIndex = 1;
+        let targetX = LANES[currentLaneIndex];
+        
+        let scene, camera, renderer;
+        let playerCar, playerModelMesh;
+        let trafficCars = [];
+        let items = [];
+        let environmentObjects = [];
+        let roadBarrierLeft, roadBarrierRight, roadPlaneMesh;
+        
+        let score = 0;
+        let coinsCollected = 0;
+        let gameActive = true;
+        let ambientSpeed = 0.85;
+        let overdriveTimer = 0;
+        let spawnTimer = 0;
+        let currentBiome = "metropolis";
+
+        let unlockedCars = [true, false, false];
+        let activeCarType = 0; 
+        const carCosts = [0, 5, 12];
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x040207);
+            scene.fog = new THREE.FogExp2(0x040207, 0.012);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 4.8, 7.5);
+            camera.lookAt(0, 1.2, -18);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambient);
+
+            buildCyberHighway();
+            updateVehicleModel();
+
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('keydown', handleInput);
+
+            animate();
+        }
+
+        function updateBiomeSystems() {
+            let previousBiome = currentBiome;
+            
+            if (score < 1500) {
+                currentBiome = "metropolis";
+            } else if (score >= 1500 && score < 3000) {
+                currentBiome = "desert";
+            } else {
+                currentBiome = "tundra";
+            }
+
+            if (currentBiome === previousBiome) return;
+
+            let skyColor, fogDensity, barrierColor, roadColor, buildingWireColor;
+
+            if (currentBiome === "metropolis") {
+                document.getElementById('biome-display').innerText = "Metropolis Grid";
+                document.getElementById('biome-display').style.color = "#ff00ff";
+                skyColor = 0x040207; fogDensity = 0.012; barrierColor = 0xff0055; roadColor = 0x0c0b11; buildingWireColor = 0x221144;
+            } 
+            else if (currentBiome === "desert") {
+                document.getElementById('biome-display').innerText = "Radioactive Desert";
+                document.getElementById('biome-display').style.color = "#ff7700";
+                skyColor = 0x1a0d02; fogDensity = 0.018; barrierColor = 0xffaa00; roadColor = 0x1f1710; buildingWireColor = 0x442200;
+            } 
+            else if (currentBiome === "tundra") {
+                document.getElementById('biome-display').innerText = "Glitch Tundra";
+                document.getElementById('biome-display').style.color = "#00ffff";
+                skyColor = 0x010c14; fogDensity = 0.022; barrierColor = 0x00ffff; roadColor = 0x07111a; buildingWireColor = 0x004455;
+            }
+
+            scene.background.setHex(skyColor);
+            scene.fog.color.setHex(skyColor);
+            scene.fog.density = fogDensity;
+            roadPlaneMesh.material.color.setHex(roadColor);
+            roadBarrierLeft.material.color.setHex(barrierColor);
+            roadBarrierLeft.material.emissive.setHex(barrierColor);
+            roadBarrierRight.material.color.setHex(barrierColor);
+            roadBarrierRight.material.emissive.setHex(barrierColor);
+
+            // Dynamically update building meshes when themes shift
+            environmentObjects.forEach(obj => {
+                if(obj.material) obj.material.color.setHex(buildingWireColor);
+            });
+        }
+
+        function buildCyberHighway() {
+            // Main Road Plane
+            const roadGeo = new THREE.PlaneGeometry(16, 1000);
+            const roadMat = new THREE.MeshStandardMaterial({ color: 0x0c0b11, roughness: 0.7 });
+            roadPlaneMesh = new THREE.Mesh(roadGeo, roadMat);
+            roadPlaneMesh.rotation.x = -Math.PI / 2;
+            roadPlaneMesh.position.z = -450;
+            scene.add(roadPlaneMesh);
+
+            // Left/Right Laser Barriers
+            const barGeo = new THREE.BoxGeometry(0.2, 0.5, 1000);
+            const barMatL = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0055, emissiveIntensity: 0.6 });
+            roadBarrierLeft = new THREE.Mesh(barGeo, barMatL);
+            roadBarrierLeft.position.set(-8, 0.25, -450);
+            scene.add(roadBarrierLeft);
+
+            const barMatR = new THREE.MeshStandardMaterial({ color: 0xff0055, emissive: 0xff0055, emissiveIntensity: 0.6 });
+            roadBarrierRight = new THREE.Mesh(barGeo, barMatR);
+            roadBarrierRight.position.set(8, 0.25, -450);
+            scene.add(roadBarrierRight);
+
+            // Generate an organized grid of towers along the road bounds down to Z = -350
+            for(let z = 0; z > -350; z -= 25) {
+                spawnEnvironmentTower(-12, z);
+                spawnEnvironmentTower(12, z);
+            }
+        }
+
+        function spawnEnvironmentTower(x, z) {
+            const height = 12 + Math.random() * 15;
+            const towerGeo = new THREE.BoxGeometry(2.5, height, 2.5);
+            const towerMat = new THREE.MeshStandardMaterial({ color: 0x221144, wireframe: true });
+            const tower = new THREE.Mesh(towerGeo, towerMat);
+            
+            // Lock positioning data arrays cleanly
+            tower.position.set(x + (Math.random() * 2 * (x > 0 ? 1 : -1)), height / 2, z);
+            scene.add(tower);
+            environmentObjects.push(tower);
+        }
+
+        function updateVehicleModel() {
+            if (playerCar) scene.remove(playerCar);
+
+            playerCar = new THREE.Group();
+            playerModelMesh = new THREE.Group();
+
+            let carColor = 0x00ffcc;
+            let w = 1.5, h = 0.45, d = 3.0;
+
+            if (activeCarType === 1) { 
+                carColor = 0xff00ff; w = 0.6; h = 0.6; d = 2.6;
+            } else if (activeCarType === 2) { 
+                carColor = 0xffff00; w = 2.0; h = 1.1; d = 4.0;
+            }
+
+            const bodyGeo = new THREE.BoxGeometry(w, h, d);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: carColor, roughness: 0.1, metalness: 0.4 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = h / 2 + 0.1;
+            playerModelMesh.add(body);
+
+            const cabinGeo = new THREE.BoxGeometry(w * 0.8, h * 0.7, d * 0.4);
+            const cabinMat = new THREE.MeshStandardMaterial({ color: 0x0a0a14, roughness: 0 });
+            const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+            cabin.position.set(0, h + 0.1, -d * 0.05);
+            playerModelMesh.add(cabin);
+
+            playerCar.add(playerModelMesh);
+            playerCar.position.set(LANES[currentLaneIndex], 0, 0);
+            scene.add(playerCar);
+        }
+
+        function buyOrEquipCar(index) {
+            if (unlockedCars[index]) {
+                activeCarType = index;
+                renderShopUI();
+                updateVehicleModel();
+            } else {
+                if (coinsCollected >= carCosts[index]) {
+                    coinsCollected -= carCosts[index];
+                    unlockedCars[index] = true;
+                    activeCarType = index;
+                    document.getElementById('coin-display').innerText = coinsCollected;
+                    renderShopUI();
+                    updateVehicleModel();
+                } else {
+                    alert("Not enough coins! Keep riding to collect more.");
+                }
+            }
+        }
+
+        function renderShopUI() {
+            for(let i = 0; i < 3; i++) {
+                let card = document.getElementById('shop-car' + i);
+                let costLabel = document.getElementById('cost-car' + i);
+                
+                card.className = "shop-item";
+                
+                if (unlockedCars[i]) {
+                    if (costLabel) costLabel.innerText = "OWNED";
+                    if (costLabel) costLabel.style.color = "#00ffff";
+                }
+                if (activeCarType === i) {
+                    card.className = "shop-item equipped";
+                    if (costLabel) costLabel.innerText = "EQUIPPED";
+                    if (costLabel) costLabel.style.color = "#00ffcc";
+                }
+            }
+        }
+
+        function spawnSpawnerObjects() {
+            let targetLane = LANES[Math.floor(Math.random() * LANES.length)];
+            let roll = Math.random();
+
+            if (roll < 0.55) {
+                const trafficGroup = new THREE.Group();
+                let isTruck = Math.random() < 0.3;
+                let carColor = isTruck ? 0xff4400 : [0xff0055, 0x9900ff, 0xeeeedd][Math.floor(Math.random()*3)];
+                
+                let w = isTruck ? 1.9 : 1.5;
+                let h = isTruck ? 1.8 : 0.6;
+                let d = isTruck ? 5.8 : 3.0;
+
+                const geo = new THREE.BoxGeometry(w, h, d);
+                const mat = new THREE.MeshStandardMaterial({ color: carColor, roughness: 0.4 });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.y = h/2 + 0.1;
+                trafficGroup.add(mesh);
+
+                trafficGroup.position.set(targetLane, 0, -200);
+                trafficGroup.userData = { type: "traffic", radiusH: w/1.8, radiusD: d/2 };
+                scene.add(trafficGroup);
+                trafficCars.push(trafficGroup);
+            } 
+            else if (roll < 0.88) {
+                const coinGeo = new THREE.BoxGeometry(0.7, 0.7, 0.7);
+                const coinMat = new THREE.MeshStandardMaterial({ color: 0xffff00, emissive: 0x555500 });
+                const coinMesh = new THREE.Mesh(coinGeo, coinMat);
+                coinMesh.position.set(targetLane, 0.6, -200);
+                coinMesh.userData = { type: "coin" };
+                scene.add(coinMesh);
+                items.push(coinMesh);
+            } 
+            else {
+                const padGeo = new THREE.ConeGeometry(0.8, 1.8, 4);
+                const padMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+                const padMesh = new THREE.Mesh(padGeo, padMat);
+                padMesh.rotation.x = -Math.PI / 2;
+                padMesh.position.set(targetLane, 0.02, -200);
+                padMesh.userData = { type: "boost" };
+                scene.add(padMesh);
+                items.push(padMesh);
+            }
+        }
+
+        function handleInput(e) {
+            if (!gameActive) return;
+
+            if (e.code === 'KeyA' || e.code === 'ArrowLeft') {
+                if (currentLaneIndex > 0) {
+                    currentLaneIndex--; targetX = LANES[currentLaneIndex];
+                    playerModelMesh.rotation.z = 0.24;
+                }
+            }
+            if (e.code === 'KeyD' || e.code === 'ArrowRight') {
+                if (currentLaneIndex < LANES.length - 1) {
+                    currentLaneIndex++; targetX = LANES[currentLaneIndex];
+                    playerModelMesh.rotation.z = -0.24;
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (gameActive) {
+                let activeSpeed = ambientSpeed;
+                if (overdriveTimer > 0) {
+                    overdriveTimer--; activeSpeed *= 2.2;
+                    score += 5;
+                    document.getElementById('overdrive-banner').style.display = 'block';
+                    camera.fieldOfView = THREE.MathUtils.lerp(camera.fieldOfView, 74, 0.1);
+                } else {
+                    score += 1;
+                    document.getElementById('overdrive-banner').style.display = 'none';
+                    camera.fieldOfView = THREE.MathUtils.lerp(camera.fieldOfView, 60, 0.08);
+                }
+                camera.updateProjectionMatrix();
+
+                document.getElementById('score-display').innerText = score;
+                ambientSpeed = 0.95 + (score * 0.00045);
+
+                updateBiomeSystems();
+
+                playerCar.position.x = THREE.MathUtils.lerp(playerCar.position.x, targetX, 0.22);
+                playerModelMesh.rotation.z = THREE.MathUtils.lerp(playerModelMesh.rotation.z, 0, 0.1);
+
+                // --- FIXED ENDLESS BACKGROUND LOGIC ---
+                // Moving towers backwards to simulate progression velocity vectors
+                environmentObjects.forEach(obj => {
+                    obj.position.z += activeSpeed;
+                    // If a building travels past behind the user camera rig (Z > 15)
+                    if (obj.position.z > 15) {
+                        // Push it back completely out of fog sight range down the highway track
+                        obj.position.z = -320;
+                    }
+                });
+
+                spawnTimer++;
+                if (spawnTimer > Math.max(10, 42 / ambientSpeed)) {
+                    spawnSpawnerObjects(); spawnTimer = 0;
+                }
+
+                for (let i = items.length - 1; i >= 0; i--) {
+                    let item = items[i]; item.position.z += activeSpeed;
+                    if (item.userData.type === "coin") item.rotation.y += 0.05;
+
+                    let distZ = Math.abs(playerCar.position.z - item.position.z);
+                    let distX = Math.abs(playerCar.position.x - item.position.x);
+
+                    if (distZ < 1.9 && distX < 1.3) {
+                        if (item.userData.type === "coin") {
+                            let yieldAmount = (activeCarType === 2) ? 2 : 1;
+                            coinsCollected += yieldAmount;
+                            score += 300;
+                            document.getElementById('coin-display').innerText = coinsCollected;
+                        } else if (item.userData.type === "boost") {
+                            overdriveTimer = 110;
+                        }
+                        scene.remove(item); items.splice(i, 1); continue;
+                    }
+                    if (item.position.z > 20) { scene.remove(item); items.splice(i, 1); }
+                }
+
+                let pWidthBounds = (activeCarType === 1) ? 0.4 : (activeCarType === 2 ? 1.0 : 0.75);
+                for (let i = trafficCars.length - 1; i >= 0; i--) {
+                    let car = trafficCars[i]; car.position.z += (0.3 + activeSpeed);
+
+                    let distZ = Math.abs(playerCar.position.z - car.position.z);
+                    let distX = Math.abs(playerCar.position.x - car.position.x);
+
+                    if (distZ < (car.userData.radiusD + 1.4) && distX < (car.userData.radiusH + pWidthBounds)) {
+                        gameActive = false;
+                        document.getElementById('final-score').innerText = score;
+                        renderShopUI();
+                        document.getElementById('game-over-panel').style.display = 'block';
+                    }
+                    if (car.position.z > 20) { scene.remove(car); trafficCars.splice(i, 1); }
+                }
+            }
+            renderer.render(scene, camera);
+        }
+
+        function resetUltimateGame() {
+            trafficCars.forEach(c => scene.remove(c));
+            items.forEach(item => scene.remove(item));
+            trafficCars = []; items = [];
+
+            score = 0; overdriveTimer = 0; ambientSpeed = 0.85;
+            currentLaneIndex = 1; targetX = LANES[currentLaneIndex];
+            playerCar.position.set(targetX, 0, 0);
+
+            document.getElementById('score-display').innerText = "0";
+            document.getElementById('game-over-panel').style.display = 'none';
+            
+            currentBiome = ""; 
+            gameActive = true;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        init();
+    </script>
+</body>
+</html>
